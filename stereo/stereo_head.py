@@ -1,15 +1,13 @@
 from common import get_torch_device
 
-from typing import overload
 import torch
 import torch.nn.functional as F
 import numpy as np
 import cv2
 
-from gmstereo import transforms
-from PIL import Image
-from gmstereo import UniMatch
-from crestereo import CREStereo
+from .gmstereo import transforms
+from .gmstereo import UniMatch
+from .crestereo import CREStereo
 from torchvision.transforms.functional import hflip
 from collections import OrderedDict
 
@@ -18,6 +16,7 @@ class InferGMStereo:
         self.device = get_torch_device()
         self.imagenet_mean = [0.485, 0.456, 0.406]
         self.imagenet_std = [0.229, 0.224, 0.225]
+        self.set_params()
 
     def initialize(self, model_path, focal=None, baseline=None, input_size=None):
         self.input_size = input_size
@@ -66,7 +65,6 @@ class InferGMStereo:
         self.pred_bidir_disp = pred_bidir_disp
         self.pred_right_disp = pred_right_disp
 
-    @overload
     def predict(self, left, right):
         pair = {"left": left, "right": right}
         pair = self.transform(pair)
@@ -128,73 +126,7 @@ class InferGMStereo:
             assert disp.size(0) == 2  # [2, H, W]
             disp = hflip(disp[1])
 
-        return disp.cpu().numpy()
-
-    @overload
-    def predict(self, left_path, right_path):
-        left = np.array(Image.open(left_path).convert("RGB")).astype(np.float32)
-        right = np.array(Image.open(right_path).convert("RGB")).astype(np.float32)
-        pair = {"left": left, "right": right}
-        pair = self.transform(pair)
-
-        left = pair["left"].to(self.device).unsqueeze(0)  # [1, 3, H, W]
-        right = pair["right"].to(self.device).unsqueeze(0)  # [1, 3, H, W]
-
-        if self.input_size is None:
-            nearest_size = [
-                int(np.ceil(left.size(-2) / self.padding_factor)) * self.padding_factor,
-                int(np.ceil(left.size(-1) / self.padding_factor)) * self.padding_factor,
-            ]
-            self.input_size = nearest_size
-
-        ori_size = left.shape[-2:]
-        self.resize = (
-            self.input_size[0] != ori_size[0] or self.input_size[1] != ori_size[1]
-        )
-        if self.resize:
-            left = F.interpolate(
-                left, size=self.input_size, mode="bilinear", align_corners=True
-            )
-            right = F.interpolate(
-                right, size=self.input_size, mode="bilinear", align_corners=True
-            )
-
-        with torch.no_grad():
-            if self.pred_bidir_disp:
-                new_left, new_right = hflip(right), hflip(left)
-                left = torch.cat((left, new_left), dim=0)
-                right = torch.cat((right, new_right), dim=0)
-
-            if self.pred_right_disp:
-                left, right = hflip(right), hflip(left)
-
-            disp = self.model(
-                left,
-                right,
-                self.attn_type,
-                self.attn_splits_list,
-                self.corr_radius_list,
-                self.prop_radius_list,
-                self.num_reg_refine,
-                task="stereo",
-            )["flow_preds"][
-                -1
-            ]  # [1, H, W]
-
-        if self.resize:
-            disp = F.interpolate(
-                disp.unsqueeze(1), size=ori_size, mode="bilinear", align_corners=True
-            ).squeeze(1)
-            disp = disp * ori_size[-1] / float(self.input_size[-1])
-
-        if self.pred_right_disp:
-            disp = hflip(disp)
-
-        if self.pred_bidir_disp:
-            assert disp.size(0) == 2  # [2, H, W]
-            disp = hflip(disp[1])
-
-        return disp.cpu().numpy()
+        return disp[0, ...].cpu().numpy()
 
 
 class InferCREStereo:
@@ -233,9 +165,8 @@ class InferCREStereo:
 
         return m
 
-    @overload
     def predict(self, left, right, n_iters=20, flow_init=True):
-        ori_h, ori_w = left.shape[:-2]
+        ori_h, ori_w = left.shape[:2]
         left = self.make_divisible(left)
         right = self.make_divisible(right)
 
@@ -247,8 +178,8 @@ class InferCREStereo:
             left = cv2.resize(left, (in_w, in_h), interpolation=cv2.INTER_LINEAR)
             right = cv2.resize(right, (in_w, in_h), interpolation=cv2.INTER_LINEAR)
 
-        left = np.transpose(left, (2, 0, 1))
-        right = np.transpose(right, (2, 0, 1))
+        left = np.transpose(left, (2, 0, 1)).astype(np.float32)
+        right = np.transpose(right, (2, 0, 1)).astype(np.float32)
 
         left = torch.from_numpy(left).unsqueeze(0).to(self.device)
         right = torch.from_numpy(right).unsqueeze(0).to(self.device)

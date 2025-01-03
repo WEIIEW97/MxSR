@@ -1,9 +1,8 @@
 from common import get_torch_device
 
-from typing import overload
-from depth_anything.dpt import DPT_DINOv2
-from depth_anything_v2.dpt import DepthAnythingV2
-from depth_anything_v2.util.transform import Resize, NormalizeImage, PrepareForNet
+from .depth_anything.dpt import DPT_DINOv2
+from .depth_anything_v2.dpt import DepthAnythingV2
+from .depth_anything_v2.util.transform import Resize, NormalizeImage, PrepareForNet
 from torchvision.transforms import Compose
 
 import torch
@@ -85,31 +84,6 @@ class InferDAM:
             self.model.load_state_dict(ckpt)
             self.input_size = input_size
 
-    @overload
-    def _infer_v1(self, image_path):
-        image = cv2.imread(image_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) / 255.0
-        h, w = image.shape[:2]
-
-        image = self.transform({"image": image})["image"]
-        image = torch.from_numpy(image).unsqueeze(0).to(self.device)
-
-        with torch.no_grad():
-            depth = self.model(image)
-
-        depth = F.interpolate(
-            depth[None], (h, w), mode="bilinear", align_corners=False
-        )[0, 0]
-        depth_raw = depth.cpu().numpy().astype(np.float32)
-        depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
-
-        depth = depth.cpu().numpy().astype(np.uint8)
-        if self.is_scale:
-            return depth
-        else:
-            return depth_raw
-
-    @overload
     def _infer_v1(self, image):
         h, w = image.shape[:2]
 
@@ -131,21 +105,6 @@ class InferDAM:
         else:
             return depth_raw
 
-    @overload
-    def _infer_v2(self, image_path):
-        image = cv2.imread(image_path)
-        self.model = self.model.to(self.device).eval()
-        depth = self.model.infer_image(image, self.input_size)
-        depth_raw = depth.astype(np.float32)
-        depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
-
-        depth = depth.astype(np.uint8)
-        if self.is_scale:
-            return depth
-        else:
-            return depth_raw
-
-    @overload
     def _infer_v2(self, image):
         self.model = self.model.to(self.device).eval()
         depth = self.model.infer_image(image, self.input_size)
@@ -162,8 +121,8 @@ class InferDAM:
         total_params = sum(param.numel() for param in self.model.parameters())
         print("Total parameters: {:.2f}M".format(total_params / 1e6))
 
-    def predict(self, image_path):
+    def predict(self, image):
         if self.mode == "v1":
-            return self._infer_v1(image_path)
+            return self._infer_v1(image)
         else:
-            return self._infer_v2(image_path)
+            return self._infer_v2(image)
