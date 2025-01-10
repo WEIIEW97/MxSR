@@ -83,7 +83,7 @@ class AttentionModule(nn.Module):
 def warp_image(img, depth, pose, intrinsics):
     # Assuming intrinsics: [B, 3, 3]
     # pose: [B, 4, 4]
-    # depth: [B, 1, H, W]
+    # depth: [B, 1, H, W]   
     B, _, H, W = depth.size()
     device = depth.device
 

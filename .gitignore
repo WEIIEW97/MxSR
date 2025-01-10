@@ -3,4 +3,6 @@ out
 dist
 __pycache__
 
-*.ipynb
+
+# no-exclude for now
+# *.ipynb
