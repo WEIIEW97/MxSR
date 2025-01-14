@@ -1,6 +1,6 @@
 from torch.utils.data import Dataset, DataLoader
 
-# from torchvision import transforms
+from torchvision import transforms
 import ast
 import re
 
@@ -11,11 +11,11 @@ import torch
 
 from common.utils import read_pfm
 
-from . import transforms
+# from . import transforms
 
 
 class Middlebury2014(Dataset):
-    def __init__(self, data_list_path, img_h, img_w):
+    def __init__(self, data_list_path, universal_resize=True):
         with open(data_list_path, "r") as f:
             self.data_list = [line.rstrip() for line in f.readlines()]
         self.l_name = "im0.png"
@@ -24,21 +24,20 @@ class Middlebury2014(Dataset):
         self.r_disp_name = "disp1.pfm"
         self.calib_name = "calib.txt"
 
-        self.img_h = img_h
-        self.img_w = img_w
+        if universal_resize:
+            self.img_h=518
+            self.img_w=518
 
         self.int_re = re.compile(r"^-?\d+$")
         self.float_re = re.compile(r"^-?\d+\.\d+$")
         train_transform_list = [
-            transforms.RandomScale(min_scale=0, max_scale=1.0, crop_width=self.img_w),
-            transforms.RandomCrop(img_h, img_w),
-            transforms.RandomRotateShiftRight(),
-            transforms.RandomColor(),
+            transforms.Resize((self.img_h, self.img_w)),
+            transforms.RandomCrop(self.img_h, self.img_w),
             transforms.RandomVerticalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=transforms.IMAGENET_MEAN, std=transforms.IMAGENET_STD
-            ),
+            # transforms.Normalize(
+            #     mean=transforms.IMAGENET_MEAN, std=transforms.IMAGENET_STD
+            # ),
         ]
 
         self.transform = transforms.Compose(train_transform_list)
@@ -87,6 +86,7 @@ class Middlebury2014(Dataset):
         calib_path = os.path.join(scene_dir, self.calib_name)
 
         l_img = cv2.imread(left_img_path, cv2.IMREAD_ANYCOLOR)[:, :, ::-1]
+        self.orig_h, self.orig_w = l_img.shape[:2]
         r_img = cv2.imread(right_img_path, cv2.IMREAD_ANYCOLOR)[:, :, ::-1]
         l_disp = read_pfm(l_disp_path)
         r_disp = read_pfm(r_disp_path)
@@ -118,6 +118,7 @@ class Middlebury2014(Dataset):
             "left_disp": l_disp_tensor,  # Tensor shape: [1, H, W]
             "right_disp": r_disp_tensor,  # Tensor shape: [1, H, W]
             "calib_data": calib_data,  # dict
+            "orig_size": (self.orig_h, self.orig_w) # original size
         }
 
         return sample

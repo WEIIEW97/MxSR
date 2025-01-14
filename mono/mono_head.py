@@ -85,10 +85,14 @@ class InferDAM:
             self.input_size = input_size
 
     def _infer_v1(self, image):
-        h, w = image.shape[:2]
-
-        image = self.transform({"image": image})["image"]
-        image = torch.from_numpy(image).unsqueeze(0).to(self.device)
+        if isinstance(image, np.ndarray):
+            h, w = image.shape[:2]
+            image = self.transform({"image": image})["image"]
+            image = torch.from_numpy(image).unsqueeze(0).to(self.device)
+        elif isinstance(image, torch.Tensor):
+            h, w = image.shape[:-2]
+        else:
+            raise ValueError(f"Unsupported input type!")
 
         with torch.no_grad():
             depth = self.model(image)

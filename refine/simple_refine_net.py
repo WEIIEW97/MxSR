@@ -1,11 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-import numpy as np
 
 from .ssim import ssim
-from .pose_net import PoseNet, euler_angles_to_rotation_matrix
 
 
 class SimpleRefineNet(nn.Module):
@@ -70,7 +66,7 @@ class AttentionModule(nn.Module):
             nn.Linear(in_channels, in_channels // reduction),
             nn.ReLU(inplace=True),
             nn.Linear(in_channels // reduction, in_channels),
-            nn.Sigmoid()
+            nn.Sigmoid(),
         )
 
     def forward(self, x):
@@ -78,37 +74,6 @@ class AttentionModule(nn.Module):
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
-    
-
-def warp_image(img, depth, pose, intrinsics):
-    # Assuming intrinsics: [B, 3, 3]
-    # pose: [B, 4, 4]
-    # depth: [B, 1, H, W]   
-    B, _, H, W = depth.size()
-    device = depth.device
-
-    y, x = torch.meshgrid(torch.arange(0, H), torch.arange(0, W))
-    y = y.to(device).float()
-    x = x.to(device).float()
-    ones = torch.ones_like(x)
-    pix_coords = torch.stack([x, y, ones], dim=0).view(3, -1)  # [3, H*W]
-    pix_coords = pix_coords.unsqueeze(0).repeat(B, 1, 1)  # [B, 3, H*W]
-
-    inv_intrinsics = torch.inverse(intrinsics)
-    cam_coords = inv_intrinsics.bmm(pix_coords) * depth.view(B, 1, -1)  # [B, 3, H*W]
-
-    cam_coords = torch.cat([cam_coords, torch.ones((B, 1, H*W), device=device)], dim=1)  # [B, 4, H*W]
-    world_coords = pose.bmm(cam_coords)  # [B, 4, H*W]
-
-    proj_coords = intrinsics.bmm(world_coords[:, :3, :])  # [B, 3, H*W]
-    proj_coords = proj_coords[:, :2, :] / (proj_coords[:, 2:3, :] + 1e-6)
-
-    proj_x = 2.0 * (proj_coords[:, 0, :] / (W - 1)) - 1.0
-    proj_y = 2.0 * (proj_coords[:, 1, :] / (H - 1)) - 1.0
-    grid = torch.stack((proj_x, proj_y), dim=2).view(B, H, W, 2)
-
-    warped_img = F.grid_sample(img, grid, padding_mode='zeros', align_corners=True)
-    return warped_img
 
 
 def compute_ssim_loss(img1, img2):
@@ -119,53 +84,13 @@ def compute_smoothness_loss(d_refined, I_L):
     grad_x = torch.abs(d_refined[:, :, :, :-1] - d_refined[:, :, :, 1:])
     grad_y = torch.abs(d_refined[:, :, :-1, :] - d_refined[:, :, 1:, :])
 
-    img_grad_x = torch.mean(torch.abs(I_L[:, :, :, :-1] - I_L[:, :, :, 1:]), 1, keepdim=True)
-    img_grad_y = torch.mean(torch.abs(I_L[:, :, :-1, :] - I_L[:, :, 1:, :]), 1, keepdim=True)
+    img_grad_x = torch.mean(
+        torch.abs(I_L[:, :, :, :-1] - I_L[:, :, :, 1:]), 1, keepdim=True
+    )
+    img_grad_y = torch.mean(
+        torch.abs(I_L[:, :, :-1, :] - I_L[:, :, 1:, :]), 1, keepdim=True
+    )
 
     grad_x_weighted = grad_x * torch.exp(-img_grad_x)
     grad_y_weighted = grad_y * torch.exp(-img_grad_y)
     return torch.mean(grad_x_weighted) + torch.mean(grad_y_weighted)
-
-
-
-def train_unsupervised_depth_refinement(model, monocular_net, stereo_net, pose_net, dataloader, optimizer, intrinsics, device):
-    model.train()
-    monocular_net.eval() 
-    stereo_net.eval()     
-    pose_net.train()
-
-    for batch in dataloader:
-        I_L, I_R = batch['left_image'].to(device), batch['right_image'].to(device)
-
-        with torch.no_grad():
-            d_mono = monocular_net(I_L)     # Shape: (B, 1, H, W)
-            d_stereo = stereo_net(I_L, I_R)  # Shape: (B, 1, H, W)
-
-        d_refined = model(d_mono, d_stereo)  # Shape: (B, 1, H, W)
-
-        translation, rotation = pose_net(I_L, I_R)
-        R = euler_angles_to_rotation_matrix(rotation)
-        t = translation.unsqueeze(2)
-
-        pose = torch.cat((R, t), dim=2)
-
-        I_R_reprojected = warp_image(I_L, d_refined, pose, intrinsics)
-
-        loss_photo_ssim = compute_ssim_loss(I_R, I_R_reprojected)
-        loss_photo_l1 = F.l1_loss(I_R, I_R_reprojected)
-        loss_photo = loss_photo_ssim + loss_photo_l1
-
-        loss_smooth = compute_smoothness_loss(d_refined, I_L)
-
-        loss_consistency = F.l1_loss(d_mono, d_stereo)
-
-        lambda_photo = 1.0
-        lambda_smooth = 0.1
-        lambda_consistency = 0.1
-        loss_total = lambda_photo * loss_photo + lambda_smooth * loss_smooth + lambda_consistency * loss_consistency
-
-        optimizer.zero_grad()
-        loss_total.backward()
-        optimizer.step()
-
-        print(f"Photo Loss: {loss_photo.item():.4f}, Smooth Loss: {loss_smooth.item():.4f}, Consistency Loss: {loss_consistency.item():.4f}, Total Loss: {loss_total.item():.4f}")

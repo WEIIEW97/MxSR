@@ -26,7 +26,7 @@ class InferGMStereo:
         self.transform = transforms.Compose(
             [
                 transforms.ToTensor(),
-                transforms.Normalize(mean=self.imagenet_mean, std=self.imagenet_std),
+                # transforms.Normalize(mean=self.imagenet_mean, std=self.imagenet_std),
             ]
         )
 
@@ -166,23 +166,30 @@ class InferCREStereo:
         return m
 
     def predict(self, left, right, n_iters=20, flow_init=True):
-        ori_h, ori_w = left.shape[:2]
-        left = self.make_divisible(left)
-        right = self.make_divisible(right)
+        if isinstance(left, np.ndarray):
+            ori_h, ori_w = left.shape[:2]
+            left = self.make_divisible(left)
+            right = self.make_divisible(right)
 
-        in_h, in_w = left.shape[:2]
-        assert in_h % 8 == 0, "input height should be divisible by 8"
-        assert in_w % 8 == 0, "input width should be divisible by 8"
+            in_h, in_w = left.shape[:2]
+            assert in_h % 8 == 0, "input height should be divisible by 8"
+            assert in_w % 8 == 0, "input width should be divisible by 8"
 
-        if in_h != ori_h or in_w != ori_w:
-            left = cv2.resize(left, (in_w, in_h), interpolation=cv2.INTER_LINEAR)
-            right = cv2.resize(right, (in_w, in_h), interpolation=cv2.INTER_LINEAR)
+            if in_h != ori_h or in_w != ori_w:
+                left = cv2.resize(left, (in_w, in_h), interpolation=cv2.INTER_LINEAR)
+                right = cv2.resize(right, (in_w, in_h), interpolation=cv2.INTER_LINEAR)
 
-        left = np.transpose(left, (2, 0, 1)).astype(np.float32)
-        right = np.transpose(right, (2, 0, 1)).astype(np.float32)
+            left = np.transpose(left, (2, 0, 1)).astype(np.float32)
+            right = np.transpose(right, (2, 0, 1)).astype(np.float32)
 
-        left = torch.from_numpy(left).unsqueeze(0).to(self.device)
-        right = torch.from_numpy(right).unsqueeze(0).to(self.device)
+            left = torch.from_numpy(left).unsqueeze(0).to(self.device)
+            right = torch.from_numpy(right).unsqueeze(0).to(self.device)
+        elif isinstance(left, torch.Tensor):
+            ori_h, ori_w = left.shape[:-2]
+            left.to(self.device)
+            right.to(self.device)
+        else:
+            raise ValueError(f"Unsupported input type.")
 
         if flow_init:
             l_dw2 = F.interpolate(
